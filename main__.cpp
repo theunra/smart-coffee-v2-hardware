@@ -1,322 +1,293 @@
-#include <Arduino.h>
+#include "Arduino.h"
 #include <Wire.h>
 #include <SPI.h>
 #include "TaskScheduler.h"
-#include "max6675.h"
-#include "DFRobot_MLX90614.h"
-#include "RelayRegister.h"
-// #include "RTClib.h"
-#include "FuzzyController.h"
-#include "ESP32_Servo.h"
-#include "NextionInterface.h"
+
+// #include "Nextion.h"
+#include "ArduinoJson.h"
+#include "ADS1X15.h"
+#include "Adafruit_SHT31.h"
+#include <MQUnifiedsensor.h>
+#include "TGS2602.h"
+#include "TGS2600.h"
 
 #define DEBUG 0
 
-// const int servo_pin = 2;
-// const int flame_pin = 4;
-// const int ir_pin = 15;
-// const int lighter_pin = 18;
-// const int relay_scl = 14;
-// const int relay_sda = 25;
-// const int relay_lat = 26;
-// const int max_do = 19;
-// const int max_cs = 23;
-// const int max_clk = 5;
+#define ADC16TO8 0.0038909912109375
 
-TaskHandle_t t0H;
-void Core0Task(void*);
+#define I2C_ADDR_ADS1    0x48 // GND
+#define I2C_ADDR_ADS2    0x49 // VCC
 
-void appinit();
-// void mlxCallback();
-// void maxCallback();
-// void fuzzCallback();
-// void relayCallback();
-// void irCallback();
-// void flameCallback();
-// void nexListenCallback();
+#define IO_INTERNAL_LED  2
+#define IO_PWM1          4
+#define IO_PWM2          5
+#define LEDC_CHAN_PWM1   0
+#define LEDC_CHAN_PWM2   1
+#define LEDC_FREQ        5000
+#define LEDC_RESO        8
 
-// bool parseNextionMsg(String);
+#define ADS_GAIN          0 //6.144V
+#define ADS1_CHAN_MQ135   0
+#define ADS1_CHAN_MQ3     1
+#define ADS1_CHAN_MQ136   2
+#define ADS1_CHAN_MQ2     3
+#define ADS2_CHAN_MQ137   0
+#define ADS2_CHAN_MQ138   1
+#define ADS2_CHAN_TGS822  2
+#define ADS2_CHAN_TGS2620 3
 
-// Task mlx_task(20, TASK_FOREVER, &mlxCallback);
-// Task max_task(1000, TASK_FOREVER, &maxCallback);
-// Task ir_task(1000, TASK_FOREVER, &irCallback);
-// Task flame_task(1000, TASK_FOREVER, &flameCallback);
-// Task fuzz_task(20, TASK_FOREVER, &fuzzCallback);
-// Task relay_task(100, TASK_FOREVER, &relayCallback);
-// Task nexlisten_task(100, TASK_FOREVER, &nexListenCallback);
+#define NEX_BUTTON_START_PID 0
+#define NEX_BUTTON_START_CID 4
+#define NEX_BUTTON_START_NAME "b1"
 
+#define NEX_BUTTON_STOP_PID 0
+#define NEX_BUTTON_STOP_CID 3
+#define NEX_BUTTON_STOP_NAME "b0"
+
+#define NEX_BUTTON_RESET_PID 0
+#define NEX_BUTTON_RESET_CID 5
+#define NEX_BUTTON_RESET_NAME "b2"
+
+#define NEX_WAVE1_PID 0
+#define NEX_WAVE1_CID 1
+#define NEX_WAVE1_NAME "s0"
+#define NEX_WAVE2_PID 0
+#define NEX_WAVE2_CID 2
+#define NEX_WAVE2_NAME "s1"
+
+#define NEX_WAVE1_CHAN_MQ135   0
+#define NEX_WAVE1_CHAN_MQ136   1
+#define NEX_WAVE1_CHAN_MQ137   2
+#define NEX_WAVE1_CHAN_MQ138   3
+#define NEX_WAVE2_CHAN_MQ2     0
+#define NEX_WAVE2_CHAN_MQ3     1
+#define NEX_WAVE2_CHAN_TGS822  2
+#define NEX_WAVE2_CHAN_TGS2620 3
+
+#define TASK_INTERVAL_MS_ADS 1
+#define TASK_INTERVAL_MS_NEX 10
+
+bool is_run = true;
+
+// TaskHandle_t t0H;
 Scheduler sch;
 
-NextionInterface nex_i(&Serial2);
-// RelayRegister relay_reg;
-// MAX6675 thermocouple(max_clk, max_cs, max_do);
-// DFRobot_MLX90614_I2C mlx_sensor;
-// RTC_DS3231 rtc;
-// Servo servo;
+// NexButton button_start = NexButton(NEX_BUTTON_START_PID, NEX_BUTTON_START_CID, NEX_BUTTON_START_NAME);
+// NexButton button_stop  = NexButton(NEX_BUTTON_STOP_PID, NEX_BUTTON_STOP_CID, NEX_BUTTON_STOP_NAME);
+// NexButton button_reset = NexButton(NEX_BUTTON_RESET_PID, NEX_BUTTON_RESET_CID, NEX_BUTTON_RESET_NAME);
+// NexWaveform wave1 = NexWaveform(NEX_WAVE1_PID, NEX_WAVE1_CID, NEX_WAVE1_NAME);
+// NexWaveform wave2 = NexWaveform(NEX_WAVE2_PID, NEX_WAVE2_CID, NEX_WAVE2_NAME);
 
-// FuzzyController fC;
-// FuzzyVariable dT("dT");
-// FuzzyVariable Valve("Valve");
+// NexTouch *nex_listen_list[] = {
+//     &button_reset,
+//     &button_start,
+//     &button_stop,
+//     NULL
+// };
 
-// float error = 0.0;
-// float target_temp = 180.0;
-// float valve_deg = 0.0;
-// float object_temp = 0.0;
-// float thermo_temp = 0.0;
-// int relay_i = 0;
-// int flame = 0;
-// int ir = 0;
-// DateTime rtc_now;
+void buttonStartCb(void*);
+void buttonStopCb(void*);
+void buttonResetCb(void*);
 
-// bool serv = false;
+ADS1115 ads1(I2C_ADDR_ADS1);
+ADS1115 ads2(I2C_ADDR_ADS2);
+Adafruit_SHT31 sht31 = Adafruit_SHT31();
+MQUnifiedsensor MQ135("ESP", 6.144, 16, 1, "MQ-135");
+MQUnifiedsensor MQ136("ESP", 6.144, 16, 1, "MQ-136");
+MQUnifiedsensor MQ137("ESP", 6.144, 16, 1, "MQ-137");
+MQUnifiedsensor MQ138("ESP", 6.144, 16, 1, "MQ-138");
+MQUnifiedsensor MQ2("ESP", 6.144, 16, 1, "MQ-2");
+MQUnifiedsensor MQ3("ESP", 6.144, 16, 1, "MQ-3");
+TGS2602 tgs2602;
 
-void Core0Task(void* vParam)
-{
-  // for(;;)
-  // {
-  //   if(valve_deg<0)
-  //   {
-  //     nex_i.updateObject<int>(5, 100);
-  //     nex_i.updateObject<int>(4, 0);
-  //   }
-  //   else if(valve_deg<=90)
-  //   {
-  //     nex_i.updateObject<int>(5,100);
-  //     nex_i.updateObject<int>(4,valve_deg*100/90);
-  //   }
-  //   else if(valve_deg<=180)
-  //   {
-  //     nex_i.updateObject<int>(5, 100 - ((valve_deg-90)*100/90));
-  //     nex_i.updateObject<int>(4,100);
-  //   }
-  //   else if(valve_deg>180)
-  //   {
-  //     nex_i.updateObject<int>(5, 0);
-  //     nex_i.updateObject<int>(4,100);
-  //   }
+uint16_t adc_mq135   = 0;
+uint16_t adc_mq136   = 0;
+uint16_t adc_mq137   = 0;
+uint16_t adc_mq138   = 0;
+uint16_t adc_mq2     = 0;
+uint16_t adc_mq3     = 0;
+uint16_t adc_tgs822  = 0;
+uint16_t adc_tgs2620 = 0;
 
-  //   nex_i.updateObject<int>(1, thermo_temp);
-  //   nex_i.updateObject<int>(6, thermo_temp);
+void Core0Task(void*);
 
-    // delay(100);
-    
-    #if DEBUG
+void fail();
 
-    Serial.print("Non-contact temp : ");
-    Serial.println(object_temp);
-    Serial.print("Thermocouple temp : ");
-    Serial.println(thermo_temp);
-    Serial.print("Servo deg : ");
-    Serial.println(valve_deg);
-    Serial.print("Flame : ");
-    Serial.println(flame);
-    Serial.print("IR : ");
-    Serial.println(ir);
+void init_hardwares();
+void init_check_sensors();
+void init_tasks();
 
-    if(!serv) 
-    {
-      servo.write(0);
-      relay_reg.setRelayValue(6, 1);
-    }
-    else{
-      servo.write(180);
-      relay_reg.setRelayValue(6, 0);
-    }
-    
-    if(relay_i !=4) relay_i += 1;
-    else relay_i = 0;
-    
-    for(int i = 0; i<4;i++) {
-      if(i == relay_i) relay_reg.setRelayValue(i, 1);
-      else relay_reg.setRelayValue(i, 0);
-    }
+void adsCallback();
+void nexCallback();
 
-    Serial.print("Relay : ");
-    Serial.println(relay_i);
+Task task_ads(TASK_INTERVAL_MS_ADS, TASK_FOREVER, &adsCallback);
+Task task_nex(TASK_INTERVAL_MS_NEX, TASK_FOREVER, &nexCallback);
 
-    delay(1000);
-
-    #endif
-  // }
-}
-
-// void mlxCallback()
-// {
-//     object_temp = mlx_sensor.getObjectTempCelsius();
-// }
-
-// void fuzzCallback()
-// {
-//   //LIBRARY REFACTOR INPROGRESS
-//   // dT.Fuzzyfication(error);
-  
-//   // fC.process();
-
-//   // valve_deg = Valve.Defuzzyfication();
-
-//   // valve_deg = map(valve_deg,0,100,0,180);
-
-//   //cuma buat bikin laporan
-//   if(error>30)
-//   {
-//     valve_deg = 180;
-//   }
-//   else if(error<30 && error>0){
-//     valve_deg = 180*error/30;
-//   }
-//   else{
-//     valve_deg = 0;
-//   }
-
-//   servo.write(valve_deg);
-// }
-
-// void maxCallback()
-// {
-//   thermo_temp = thermocouple.readCelsius();
-//   error = target_temp - thermo_temp;
-// }
-
-// void irCallback()
-// {
-//   ir = digitalRead(ir_pin);
-// }
-
-// void flameCallback()
-// {
-//   flame = digitalRead(flame_pin);
-// }
-
-// void relayCallback()
-// {
-//   relay_reg.updateRelay();
-// }
-
-void nexListenCallback()
-{
-  String data_nex = nex_i.listen();
-  // parseNextionMsg(data_nex);
-}
-
-// //pin pwm1 , IO13
-// bool parseNextionMsg(String msg)
-// {
-//   bool ok = 0;
-//   if(msg[0]=='*')
-//   {
-//     ok=true;
-//   }
-
-//   if(ok)
-//   {
-//     bool input_id = false;
-//     bool input_val = false;
-//     String id = "";
-//     String val = "";
-//     for(int i = 0;i<msg.length();i++)
-//     {
-//       if(i==0)
-//       {
-//         input_id = true;
-//         continue;
-//       }
-//       else if(msg[i]=='#')
-//       {
-//         input_id = false;
-//         input_val = true;
-//         continue;
-//       }
-//       else if(msg[i]=='%')
-//       {
-//         break;
-//       }
-
-//       if(input_id)
-//       {
-//         id+=msg[i];
-//       }
-//       else if(input_val)
-//       {
-//         val+=msg[i];
-//       }
-//     }
-
-//     if(id == "agi")
-//     {
-//       if(val == "1")
-//       {
-//         relay_reg.setRelayValue(1, 0);
-//       }
-//       else if(val == "0")
-//       {
-//         relay_reg.setRelayValue(1, 1);
-//       }
-//     }
-//     else if(id == "blw")
-//     {
-//       if(val == "1")
-//       {
-//         relay_reg.setRelayValue(2, 0);
-//       }
-//       else if(val == "0")
-//       {
-//         relay_reg.setRelayValue(2, 1);
-//       }
-//     }
-//     else if(id == "lig")
-//     {
-//       if(val == "1")
-//       {
-//         relay_reg.setRelayValue(3, 0);
-//       }
-//       else if(val == "0")
-//       {
-//         relay_reg.setRelayValue(3, 1);
-//       }
-//     }
-//   }
-
-//   return ok;
-// }
-
-void appinit()
-{
-  Serial.begin(9600);
-  Wire.begin();
-  delay(1000);
-
-  xTaskCreatePinnedToCore(
-                  Core0Task,   
-                  "Core0Task", 
-                  10000,    
-                  NULL,     
-                  1,        
-                  &t0H,     
-                  0);
-
-  sch.init();
-  // sch.addTask(mlx_task);
-  // sch.addTask(fuzz_task);
-  // sch.addTask(max_task);
-  // sch.addTask(relay_task);
-  // sch.addTask(flame_task);
-  // sch.addTask(ir_task);
-  // sch.addTask(nexlisten_task);
-  // mlx_task.enable();
-  // fuzz_task.enable();
-  // max_task.enable();
-  // relay_task.enable();
-  // flame_task.enable();
-  // ir_task.enable();
-  // nexlisten_task.enable();
-}
 
 void setup()
 {
-  appinit();
+    init_hardwares(); // GPIO and such
+    init_check_sensors(); // Initial check for sensors
+    init_tasks();
 }
 
 void loop() 
 {
-  sch.execute();
+    sch.execute();
 }
+
+
+void Core0Task(void* vParam)
+{
+    String message = "";
+    for(;;)
+    {
+        if(Serial.available() > 0){
+            while(Serial.available() > 0)
+            {
+                message += Serial.read();
+            }
+            Serial.println(message);
+            message = "";
+        }
+        Serial.println("hello");
+        sleep(1000);
+    }
+}
+
+void fail()
+{
+    while(1){
+        Serial.println("error");
+        sleep(1000);
+    }
+}
+
+void init_hardwares()
+{
+    ledcSetup(LEDC_CHAN_PWM1, LEDC_FREQ, LEDC_RESO);
+    ledcSetup(LEDC_CHAN_PWM2, LEDC_FREQ, LEDC_RESO);
+
+    ledcAttachPin(IO_PWM1, LEDC_CHAN_PWM1);
+    ledcAttachPin(IO_PWM2, LEDC_CHAN_PWM2);
+
+    // nexInit();
+    // button_start.attachPush(buttonStartCb);
+    // button_stop.attachPush(buttonStopCb);
+    // button_reset.attachPush(buttonResetCb);
+    ledcWrite(LEDC_CHAN_PWM1, 245);
+    ledcWrite(LEDC_CHAN_PWM2, 245);
+
+    Wire.begin();
+    Serial.begin(9600);
+}
+
+void init_check_sensors()
+{
+    if(!ads1.isConnected()){
+        Serial.println("{\"error\" : \"ADS 1 ERROR!\"}");
+        fail();
+    }
+
+    if(!ads2.isConnected()){
+        Serial.println("{\"error\" : \"ADS 2 ERROR!\"}");
+        fail();
+    }
+
+    ads1.setGain(ADS_GAIN);
+    ads2.setGain(ADS_GAIN);
+
+    MQ135.setRegressionMethod(1);
+    MQ136.setRegressionMethod(1);
+    MQ137.setRegressionMethod(1);
+    MQ138.setRegressionMethod(1);
+    MQ2.setRegressionMethod(1);
+    MQ3.setRegressionMethod(1);
+}
+
+void init_tasks()
+{
+    // xTaskCreatePinnedToCore(
+    //     Core0Task,   
+    //     "Core0Task", 
+    //     10000,    
+    //     NULL,     
+    //     1,        
+    //     &t0H,     
+    //     0);
+    
+    
+    sch.init();
+    sch.addTask(task_ads);
+    // sch.addTask(task_nex);
+    task_ads.enable();
+    // task_nex.enable();
+}
+
+void adsCallback()
+{
+    // sample sensors
+    adc_mq135   = ads1.readADC(ADS1_CHAN_MQ135);
+    adc_mq136   = ads1.readADC(ADS1_CHAN_MQ136);
+    adc_mq2     = ads1.readADC(ADS1_CHAN_MQ2);
+    adc_mq3     = ads1.readADC(ADS1_CHAN_MQ3);
+    adc_mq137   = ads2.readADC(ADS2_CHAN_MQ137);
+    adc_mq138   = ads2.readADC(ADS2_CHAN_MQ138);
+    adc_tgs822  = ads2.readADC(ADS2_CHAN_TGS822);
+    adc_tgs2620 = ads2.readADC(ADS2_CHAN_TGS2620);
+
+    // update graphs in nextion
+    // wave1.addValue(NEX_WAVE1_CHAN_MQ135,   ADC16TO8 * adc_mq135);
+    // wave1.addValue(NEX_WAVE1_CHAN_MQ136,   ADC16TO8 * adc_mq136);
+    // wave1.addValue(NEX_WAVE1_CHAN_MQ137,   ADC16TO8 * adc_mq137);
+    // wave1.addValue(NEX_WAVE1_CHAN_MQ138,   ADC16TO8 * adc_mq138);
+    // wave2.addValue(NEX_WAVE2_CHAN_MQ2,     ADC16TO8 * adc_mq2);
+    // wave2.addValue(NEX_WAVE2_CHAN_MQ3,     ADC16TO8 * adc_mq3);
+    // wave2.addValue(NEX_WAVE2_CHAN_TGS822,  ADC16TO8 * adc_tgs822);
+    // wave2.addValue(NEX_WAVE2_CHAN_TGS2620, ADC16TO8 * adc_tgs2620);
+
+    // send data to m6
+    const int sensor_json_cap = JSON_OBJECT_SIZE(8);
+    StaticJsonDocument<sensor_json_cap> sensor_json;
+
+    sensor_json["adc_mq135"]   = adc_mq135;
+    sensor_json["adc_mq136"]   = adc_mq136;
+    sensor_json["adc_mq137"]   = adc_mq137;
+    sensor_json["adc_mq138"]   = adc_mq138;
+    sensor_json["adc_mq2"]     = adc_mq2;
+    sensor_json["adc_mq3"]     = adc_mq3;
+    sensor_json["adc_tgs822"]  = adc_tgs822;
+    sensor_json["adc_tgs2620"] = adc_tgs2620;
+
+    serializeJson(sensor_json, Serial);
+    Serial.print("\n");
+}
+
+void nexCallback()
+{
+    // nexLoop(nex_listen_list);
+}
+
+// int pwm = 0;
+// const int inc = 25;
+
+// void buttonStartCb(void *ptr)
+// {
+//   Serial.println("START");
+//   if(pwm < 250) pwm += inc;
+//   ledcWrite(LEDC_CHAN_PWM1, pwm);
+// }
+
+// void buttonStopCb(void *ptr)
+// {
+//   Serial.println("STOP");
+//   if(pwm > 0) pwm -= inc;
+//   ledcWrite(LEDC_CHAN_PWM1, pwm);
+// }
+
+// void buttonResetCb(void *ptr)
+// {
+//   Serial.println("RESET");
+//   pwm = 0;
+//   ledcWrite(LEDC_CHAN_PWM1, pwm);
+// }
