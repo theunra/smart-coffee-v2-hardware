@@ -8,6 +8,7 @@
 #include "Adafruit_SHT31.h"
 #include "MQUnifiedsensor.h"
 #include "TGS2620.h"
+#include "Nextion.h"
 
 #define DEBUG 0
 
@@ -17,6 +18,7 @@
 
 #define I2C_ADDR_ADS1    0x48 // GND
 #define I2C_ADDR_ADS2    0x49 // VCC
+#define I2C_ADDR_SHT21   0x44
 
 #define IO_INTERNAL_LED  2
 #define IO_PWM1          25
@@ -150,7 +152,6 @@ void Core0Task(void* vParam)
             Serial.println(message);
             message = "";
         }
-        Serial.println("hello");
         sleep(1000);
     }
 }
@@ -158,7 +159,7 @@ void Core0Task(void* vParam)
 void fail()
 {
     while(1){
-        Serial.println("error");
+        Serial.println("{\"error\" : \"ERROR!\"}");
         sleep(1000);
     }
 }
@@ -171,18 +172,18 @@ void init_hardwares()
     ledcAttachPin(IO_PWM1, LEDC_CHAN_PWM1);
     ledcAttachPin(IO_PWM2, LEDC_CHAN_PWM2);
 
-    // nexInit();
+    nexInit();
     // button_reset.attachPush(buttonResetCb);
     ledcWrite(LEDC_CHAN_PWM1, 210);
     ledcWrite(LEDC_CHAN_PWM2, 210);
 
     Wire.begin();
-    Serial.begin(9600);
+    Serial.begin(115200);
 }
 
 void init_check_sensors()
 {
-    if (!sht31.begin(0x44)) // Set to 0x45 for alternate i2c addr
+    if (!sht31.begin(I2C_ADDR_SHT21))
     {
         Serial.println("{\"error\" : \"SHT31 ERROR!\"}");
         fail();
@@ -208,49 +209,49 @@ void init_check_sensors()
 
     // Setting param gas sensors
 
-    float mq135_rL = 10;
+    float mq135_rL = 20;
     float ratio_mq135_air = 3.6;
     
     mq135.setRegressionMethod(1);
     mq135.setRL(mq135_rL);
 
-    float mq136_rL = 10;
+    float mq136_rL = 20;
     float ratio_mq136_air = 3.6;
 
     mq136.setRegressionMethod(1);
     mq136.setRL(mq136_rL);
 
-    float mq137_rL = 10;
+    float mq137_rL = 20;
     float ratio_mq137_air = 3.6;
 
     mq137.setRegressionMethod(1);
     mq137.setRL(mq137_rL);
 
-    float mq138_rL = 10;
+    float mq138_rL = 20;
     float ratio_mq138_air = 9.8;
 
     mq138.setRegressionMethod(1);
     mq138.setRL(mq138_rL);
 
-    float mq2_rL = 10;
+    float mq2_rL = 20;
     float ratio_mq2_air = 9.83;
 
     mq2.setRegressionMethod(1);
     mq2.setRL(mq2_rL);
 
-    float mq3_rL = 10;
+    float mq3_rL = 20;
     float ratio_mq3_air = 60;
 
     mq3.setRegressionMethod(1);
     mq3.setRL(mq3_rL);
 
-    float tgs2620_rL = 0.45;
+    float tgs2620_rL = 20;
     float ratio_tgs2620_air = 21; // ini jg gatau bnr ga
 
     tgs2620.setRL(tgs2620_rL);
     tgs2620.setRatioAir(ratio_tgs2620_air);
 
-    float tgs822_rL = 0.45;
+    float tgs822_rL = 20;
     float ratio_tgs822_air = 17; //sepertinya
 
     tgs822.setRL(tgs822_rL);
@@ -427,9 +428,9 @@ void adsCallback()
         CO       | 605.18 | -3.937  
         Alcohol  | 77.255 | -3.18 
         CO2      | 110.47 | -2.862
-        Toluen  | 44.947 | -3.445
+        Toluen   | 44.947 | -3.445
         NH4      | 102.2  | -2.473
-        Aceton  | 34.668 | -3.369
+        Aceton   | 34.668 | -3.369
     */
 
     mq135.setADC(adc_mq135);
@@ -549,7 +550,7 @@ void adsCallback()
         Exponential regression:
         Gas    | a      | b
         LPG    | 44771  | -3.245
-        CH4    | 2*10^31| 19.01     // angkanya diluar nayla
+        CH4    | 65.8824| -1.157803532
         CO     | 521853 | -3.821
         Alcohol| 0.3934 | -1.504
         Benzene| 4.8387 | -2.68
@@ -560,8 +561,8 @@ void adsCallback()
     mq3.setA(44771); mq3.setB(-3.245);
     float mq3_lpg = mq3.readSensor(); 
 
-    mq3.setA(2e+31); mq3.setB(19.01);
-    float mq3_ch4 = mq3.readSensor(); 
+    mq3.setA(65.8824); mq3.setB(-1.1578);
+    double mq3_ch4 = mq3.readSensor(); 
 
     mq3.setA(521853); mq3.setB(-3.821);
     float mq3_co = mq3.readSensor(); 
@@ -590,13 +591,15 @@ void adsCallback()
     */
     tgs822.setADC(adc_tgs822);
 
-    float tgs822_methane    = tgs822.calculatePpm(adc_tgs822, 801945, -3.583947);
+    double tgs822_methane    = tgs822.calculatePpm(adc_tgs822, 801945, -3.583947);
     float tgs822_co         = tgs822.calculatePpm(adc_tgs822, 2966.6364, -2.417324);
     float tgs822_isobutane  = tgs822.calculatePpm(adc_tgs822, 1424.408, -2.263743);
     float tgs822_hexane     = tgs822.calculatePpm(adc_tgs822, 343.0545, -1.763533);
     float tgs822_benzene    = tgs822.calculatePpm(adc_tgs822, 353.6719, -1.575331);
     float tgs822_ethanol    = tgs822.calculatePpm(adc_tgs822, 282.5765, -1.599635);
     float tgs822_acetone    = tgs822.calculatePpm(adc_tgs822, 317.8024, -1.270728);
+
+    // Serial.println(tgs822_methane);
 
     // TGS2620 ======================================================================================================================================
     /*

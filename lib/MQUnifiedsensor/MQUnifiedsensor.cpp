@@ -133,7 +133,7 @@ float MQUnifiedsensor::validateEcuation(float ratioInput)
   //Serial.println("Result: "); Serial.println(_PPM);
   return _PPM;  
 }
-float MQUnifiedsensor::readSensor(bool isMQ303A, float correctionFactor, bool injected)
+double MQUnifiedsensor::readSensor(bool isMQ303A, float correctionFactor, bool injected)
 {
   //More explained in: https://jayconsystems.com/blog/understanding-a-gas-sensor
   if(isMQ303A) {

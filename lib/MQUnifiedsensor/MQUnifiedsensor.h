@@ -31,7 +31,7 @@ class MQUnifiedsensor
     
     //user functions
     float calibrate(float ratioInCleanAir);
-    float readSensor(bool isMQ303A = false, float correctionFactor = 0.0, bool injected=false);
+    double readSensor(bool isMQ303A = false, float correctionFactor = 0.0, bool injected=false);
     float readSensorR0Rs();
     float validateEcuation(float ratioInput = 0);
     
@@ -59,7 +59,7 @@ class MQUnifiedsensor
     byte _regressionMethod = 1; // 1 -> Exponential || 2 -> Linear
     
     float _adc, _a, _b, _sensor_volt;
-    float  _R0, RS_air, _ratio, _PPM, _RS_Calc;  
+    double  _R0, RS_air, _ratio, _PPM, _RS_Calc;  
     
     char _type[6];
     char _placa[20]; 

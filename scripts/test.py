@@ -5,7 +5,7 @@ from datetime import datetime
 import json
 
 PORT = "COM16"
-BAUDRATE = 9600
+BAUDRATE = 115200
 
 serial_handler = SerialHandler(PORT, BAUDRATE)
 status = "preheat"

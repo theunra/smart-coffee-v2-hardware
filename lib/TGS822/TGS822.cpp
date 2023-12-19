@@ -22,9 +22,14 @@ void TGS822::calculateRatio(float adc){
 }
 
 float TGS822::calculatePpm(int adc, float a, float b){
-  calculateRatio(adc);
-  float ratio = getRatio();
-  float ppm = a * pow(ratio, b);
+  // calculateRatio(adc);
+  float _RS_Calc = ((_VOLT_RESOLUTION*RL)/VRL)-RL; //Get value of RS in a gas
+  if(_RS_Calc < 0)  _RS_Calc = 0; //No negative values accepted.
+  double _ratio = _RS_Calc / Ro;   // Get ratio RS_gas/RS_air
+  if(_ratio <= 0)  _ratio = 0; //No negative values accepted or upper datasheet recomendation.
+
+  // float ratio = getRatio();
+  float ppm = a * pow(_ratio, b);
 
   return ppm;
 }
