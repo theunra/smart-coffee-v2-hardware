@@ -8,7 +8,6 @@
 #include "Adafruit_SHT31.h"
 #include "MQUnifiedsensor.h"
 #include "TGS2620.h"
-#include "Nextion.h"
 
 #define DEBUG 0
 
@@ -41,14 +40,14 @@
 #define ADS2_CHAN_TGS2620 3
 
 #define NEX_BUTTON_RESET_PID 0
-#define NEX_BUTTON_RESET_CID 5
+#define NEX_BUTTON_RESET_CID 6
 #define NEX_BUTTON_RESET_NAME "b2"
 
 #define NEX_WAVE1_PID 0
-#define NEX_WAVE1_CID 1
+#define NEX_WAVE1_CID 2
 #define NEX_WAVE1_NAME "s0"
 #define NEX_WAVE2_PID 0
-#define NEX_WAVE2_CID 2
+#define NEX_WAVE2_CID 3
 #define NEX_WAVE2_NAME "s1"
 
 #define NEX_WAVE1_CHAN_MQ135   0
@@ -61,32 +60,29 @@
 #define NEX_WAVE2_CHAN_TGS2620 3
 
 #define TASK_INTERVAL_MS_ADS 1
-#define TASK_INTERVAL_MS_NEX 10
+#define TASK_INTERVAL_MS_NEX 20
+#define TASK_INTERVAL_MS_GRAPH 20
+#define TASK_INTERVAL_MS_M6READ 20
 
-#define USE_NEXTION_GRAPH 0
+#define USE_NEXTION_GRAPH 1
 #define IS_CALIBRATING_GAS_SENSOR 0
 #define USE_PPM 1
+
+#define pcSerial Serial2
+#define nexSerial Serial
+
+namespace ROASTING_LEVEL {
+    enum {CHARGE, LIGHT, MEDIUM, DARK};
+}
 
 bool is_run = true;
 
 Preferences pref;
 
-// TaskHandle_t t0H;
+TaskHandle_t t0H;
 Scheduler sch;
 
-// NexButton button_reset = NexButton(NEX_BUTTON_RESET_PID, NEX_BUTTON_RESET_CID, NEX_BUTTON_RESET_NAME);
-
-#if USE_NEXTION_GRAPH
-NexWaveform wave1 = NexWaveform(NEX_WAVE1_PID, NEX_WAVE1_CID, NEX_WAVE1_NAME);
-NexWaveform wave2 = NexWaveform(NEX_WAVE2_PID, NEX_WAVE2_CID, NEX_WAVE2_NAME);
-#endif
-
-// NexTouch *nex_listen_list[] = {
-//     &button_reset,
-//     NULL
-// };
-
-// void buttonResetCb(void*);
+void sendWave(int cid, int chan, int val);
 
 ADS1115 ads1(I2C_ADDR_ADS1);
 ADS1115 ads2(I2C_ADDR_ADS2);
@@ -121,9 +117,13 @@ void init_tasks();
 
 void adsCallback();
 void nexCallback();
+void graphCallback();
+void m6ReadCallback();
 
 Task task_ads(TASK_INTERVAL_MS_ADS, TASK_FOREVER, &adsCallback);
 Task task_nex(TASK_INTERVAL_MS_NEX, TASK_FOREVER, &nexCallback);
+Task task_graph(TASK_INTERVAL_MS_GRAPH, TASK_FOREVER, &graphCallback);
+Task task_m6read(TASK_INTERVAL_MS_GRAPH, TASK_FOREVER, &m6ReadCallback);
 
 
 void setup()
@@ -141,26 +141,18 @@ void loop()
 
 void Core0Task(void* vParam)
 {
-    String message = "";
     for(;;)
     {
-        if(Serial.available() > 0){
-            while(Serial.available() > 0)
-            {
-                message += Serial.read();
-            }
-            Serial.println(message);
-            message = "";
-        }
-        sleep(1000);
+        graphCallback();
+        delay(200);
     }
 }
 
 void fail()
 {
     while(1){
-        Serial.println("{\"error\" : \"ERROR!\"}");
-        sleep(1000);
+        pcSerial.println("{\"error\" : \"ERROR!\"}");
+        delay(1000);
     }
 }
 
@@ -172,35 +164,35 @@ void init_hardwares()
     ledcAttachPin(IO_PWM1, LEDC_CHAN_PWM1);
     ledcAttachPin(IO_PWM2, LEDC_CHAN_PWM2);
 
-    nexInit();
-    // button_reset.attachPush(buttonResetCb);
     ledcWrite(LEDC_CHAN_PWM1, 210);
     ledcWrite(LEDC_CHAN_PWM2, 210);
 
     Wire.begin();
-    Serial.begin(115200);
+
+    pcSerial.begin(115200);
+    nexSerial.begin(9600);
 }
 
 void init_check_sensors()
 {
     if (!sht31.begin(I2C_ADDR_SHT21))
     {
-        Serial.println("{\"error\" : \"SHT31 ERROR!\"}");
+        pcSerial.println("{\"error\" : \"SHT31 ERROR!\"}");
         fail();
     }
 
     if (sht31.isHeaterEnabled()) 
-        Serial.println("{\"info\" : \"SHT31 Heater Enabled!\"}");
+        pcSerial.println("{\"info\" : \"SHT31 Heater Enabled!\"}");
     else 
-        Serial.println("{\"info\" : \"SHT31 Heater Disabled!\"}");
+        pcSerial.println("{\"info\" : \"SHT31 Heater Disabled!\"}");
 
     if(!ads1.isConnected()){
-        Serial.println("{\"error\" : \"ADS 1 ERROR!\"}");
+        pcSerial.println("{\"error\" : \"ADS 1 ERROR!\"}");
         fail();
     }
 
     if(!ads2.isConnected()){
-        Serial.println("{\"error\" : \"ADS 2 ERROR!\"}");
+        pcSerial.println("{\"error\" : \"ADS 2 ERROR!\"}");
         fail();
     }
 
@@ -261,7 +253,7 @@ void init_check_sensors()
     pref.begin(PREF_NAMESPACE_ENOSE_R0, false); // load enose r0 pref
 
     #if IS_CALIBRATING_GAS_SENSOR
-    Serial.println("{\"info\" : \"Calibrating gas sensors...\"}");
+    pcSerial.println("{\"info\" : \"Calibrating gas sensors...\"}");
 
     // MQ135 Calibration
     float calc_r0 = 0;
@@ -275,8 +267,8 @@ void init_check_sensors()
     mq135.setR0(calc_r0/mq135_rL);
     pref.putFloat("mq135", calc_r0);
 
-    // if(isinf(calcR0)) {Serial.println("Warning: Conection issue, R0 is infinite (Open circuit detected) please check your wiring and supply"); while(1);}
-    // if(calcR0 == 0){Serial.println("Warning: Conection issue found, R0 is zero (Analog pin shorts to ground) please check your wiring and supply"); while(1);}
+    // if(isinf(calcR0)) {pcSerial.println("Warning: Conection issue, R0 is infinite (Open circuit detected) please check your wiring and supply"); while(1);}
+    // if(calcR0 == 0){pcSerial.println("Warning: Conection issue found, R0 is zero (Analog pin shorts to ground) please check your wiring and supply"); while(1);}
 
     // MQ136 Calibration
     calc_r0 = 0;
@@ -362,7 +354,7 @@ void init_check_sensors()
     tgs822.setR0(calc_r0/tgs822_rL);
     pref.putFloat("tgs822", calc_r0);
 
-    Serial.println("{\"info\" : \"calibration done\"}");
+    pcSerial.println("{\"info\" : \"calibration done\"}");
 
     #else // get config from pref
     float mq135_r0    = pref.getFloat("mq135");
@@ -391,21 +383,25 @@ void init_check_sensors()
 
 void init_tasks()
 {
-    // xTaskCreatePinnedToCore(
-    //     Core0Task,   
-    //     "Core0Task", 
-    //     10000,    
-    //     NULL,     
-    //     1,        
-    //     &t0H,     
-    //     0);
+    xTaskCreatePinnedToCore(
+        Core0Task,   
+        "Core0Task", 
+        10000,    
+        NULL,     
+        1,        
+        &t0H,     
+        0);
 
 
     sch.init();
     sch.addTask(task_ads);
     sch.addTask(task_nex);
+    // sch.addTask(task_graph);
+    sch.addTask(task_m6read);
     task_ads.enable();
     task_nex.enable();
+    // task_graph.enable();
+    task_m6read.enable();
 }
 
 void adsCallback()
@@ -599,7 +595,7 @@ void adsCallback()
     float tgs822_ethanol    = tgs822.calculatePpm(adc_tgs822, 282.5765, -1.599635);
     float tgs822_acetone    = tgs822.calculatePpm(adc_tgs822, 317.8024, -1.270728);
 
-    // Serial.println(tgs822_methane);
+    // pcSerial.println(tgs822_methane);
 
     // TGS2620 ======================================================================================================================================
     /*
@@ -699,28 +695,152 @@ void adsCallback()
     sensor_json["tgs2620_ethanol"]   = tgs2620_ethanol;
     #endif
 
-    serializeJson(sensor_json, Serial);
-    Serial.print("\n");
+    serializeJson(sensor_json, pcSerial);
+    pcSerial.print("\n");
+}
 
+void graphCallback(){
     #if USE_NEXTION_GRAPH
-    //update graphs in nextion
-    wave1.addValue(NEX_WAVE1_CHAN_MQ135,   ADC16TO8 * adc_mq135);
-    wave1.addValue(NEX_WAVE1_CHAN_MQ136,   ADC16TO8 * adc_mq136);
-    wave1.addValue(NEX_WAVE1_CHAN_MQ137,   ADC16TO8 * adc_mq137);
-    wave1.addValue(NEX_WAVE1_CHAN_MQ138,   ADC16TO8 * adc_mq138);
-    wave2.addValue(NEX_WAVE2_CHAN_MQ2,     ADC16TO8 * adc_mq2);
-    wave2.addValue(NEX_WAVE2_CHAN_MQ3,     ADC16TO8 * adc_mq3);
-    wave2.addValue(NEX_WAVE2_CHAN_TGS822,  ADC16TO8 * adc_tgs822);
-    wave2.addValue(NEX_WAVE2_CHAN_TGS2620, ADC16TO8 * adc_tgs2620);
+    sendWave(NEX_WAVE1_CID, NEX_WAVE1_CHAN_MQ135,   (int)(ADC16TO8 * adc_mq135));
+    sendWave(NEX_WAVE1_CID, NEX_WAVE1_CHAN_MQ136,   (int)(ADC16TO8 * adc_mq136));
+    sendWave(NEX_WAVE1_CID, NEX_WAVE1_CHAN_MQ137,   (int)(ADC16TO8 * adc_mq137));
+    sendWave(NEX_WAVE1_CID, NEX_WAVE1_CHAN_MQ138,   (int)(ADC16TO8 * adc_mq138));
+    sendWave(NEX_WAVE2_CID, NEX_WAVE2_CHAN_MQ2,     (int)(ADC16TO8 * adc_mq2));
+    sendWave(NEX_WAVE2_CID, NEX_WAVE2_CHAN_MQ3,     (int)(ADC16TO8 * adc_mq3));
+    sendWave(NEX_WAVE2_CID, NEX_WAVE2_CHAN_TGS822,  (int)(ADC16TO8 * adc_tgs822));
+    sendWave(NEX_WAVE2_CID, NEX_WAVE2_CHAN_TGS2620, (int)(ADC16TO8 * adc_tgs2620));
     #endif
 }
 
-void nexCallback()
-{
-    // nexLoop(nex_listen_list);
+void processM6ReadData(String data){
+    
+    if (data == "#preheat"){
+        nexSerial.print("t8.txt=\"preheat\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=64073");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+    }
+    else if (data == "#charge"){
+        nexSerial.print("t8.txt=\"charge\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=3970");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+    }
+    else if(data == "#light"){
+        nexSerial.print("t8.txt=\"light\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=62785");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+    } 
+    else if (data == "#medium"){
+        nexSerial.print("t8.txt=\"medium\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=62401");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);   
+    }
+    else if (data == "#dark"){
+        nexSerial.print("t8.txt=\"dark\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=35520");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);   
+    }
+    else if (data == "#finish"){
+        nexSerial.print("t8.txt=\"finish\"");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.print("t8.bco=3970");
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);
+        nexSerial.write(0xFF);   
+    }
 }
 
-// void buttonResetCb(void *ptr)
-// {
-//   Serial.println("OFF1");
-// }
+char m6r_buf[1024];
+char m6r_buf_i = 0;
+void m6ReadCallback(){
+    if(pcSerial.available()){
+        while(pcSerial.available()){
+            m6r_buf[m6r_buf_i] = pcSerial.read();
+
+            if(m6r_buf_i == 0 && m6r_buf[m6r_buf_i] != '#'){ // header
+                //reject data, wrong header
+                continue;
+            }
+
+            if(m6r_buf[m6r_buf_i] == ';' || m6r_buf_i >= 1023){
+                m6r_buf[m6r_buf_i] = '\0';
+                processM6ReadData(String(m6r_buf));
+                m6r_buf_i = 0;
+            }
+            else{
+                m6r_buf_i++;
+            }
+        }
+    }
+}
+
+char buf[1024];
+char buf_i = 0;
+
+void nexCallback()
+{
+    if(nexSerial.available()){
+        while(nexSerial.available()){
+            buf[buf_i] = nexSerial.read();
+
+            if(buf_i == 0 && buf[buf_i] != '#'){ // header
+                //reject data, wrong header
+                continue;
+            }
+
+            if(buf[buf_i] == ';' || buf_i >= 1023){
+                buf[buf_i] = '\0';
+                // pcSerial.println(buf); //process data here
+                buf_i = 0;
+            }
+            else{
+                buf_i++;
+            }
+        }
+    }
+}
+
+void buttonResetCb(void *ptr)
+{
+  pcSerial.println("OFF1");
+}
+
+void sendWave(int cid, int chan, int val){
+    if(val > 254) val = 254;
+    String msg = "add " + 
+        String(cid) + "," +
+        String(chan) + "," + 
+        String(val);
+    
+    nexSerial.print(msg);
+    nexSerial.write(0xFF);
+    nexSerial.write(0xFF);
+    nexSerial.write(0xFF);
+    delay(50);
+}

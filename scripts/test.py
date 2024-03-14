@@ -11,13 +11,15 @@ serial_handler = SerialHandler(PORT, BAUDRATE)
 status = "preheat"
 filetime = datetime.now().isoweekday()
 filename = "output.txt"
+is_run = True
 
 def listen_serial():
-    while(1):
+    global is_run
+    while(is_run):
         global status
-        
+    
         c = input()
-        
+    
         if(c == "p"):
             status= "preheat"
         elif(c == "c"):
@@ -34,12 +36,13 @@ def listen_serial():
             status= "dark"
         elif(c == "q"):
             status= "finish"
-            
-if __name__ == "__main__":
-    thread_serial_listen = threading.Thread(target=listen_serial)
-    thread_serial_listen.start()
 
-    while(1):
+        o = "#" + status + ";"
+        serial_handler.write(o.encode())
+
+def listen_sensor():
+    global is_run
+    while(is_run):
         try:
             t = datetime.now()
             data = serial_handler.read()
@@ -56,6 +59,16 @@ if __name__ == "__main__":
             f = open(filename, "+a")
             f.write(out + '\n')
             f.close()
+
         except Exception as e:
             print(e)
-        # time.sleep(1)
+            
+if __name__ == "__main__":
+    thread_serial_listen = threading.Thread(target=listen_sensor)
+    thread_serial_listen.start()
+
+    serial_handler.ser.flush()
+
+    listen_serial()
+    
+        
