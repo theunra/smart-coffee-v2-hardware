@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 import json
 
-PORT = "COM16"
+PORT = "COM9"
 BAUDRATE = 115200
 
 serial_handler = SerialHandler(PORT, BAUDRATE)
@@ -16,29 +16,33 @@ is_run = True
 def listen_serial():
     global is_run
     while(is_run):
-        global status
-    
-        c = input()
-    
-        if(c == "p"):
-            status= "preheat"
-        elif(c == "c"):
-            status= "charge"
-        elif(c == "1"):
-            status= "first crack"
-        elif(c == "2"):
-            status= "second crack"
-        elif(c == "l"):
-            status= "light"
-        elif(c == "m"):
-            status= "medium"
-        elif(c == "d"):
-            status= "dark"
-        elif(c == "q"):
-            status= "finish"
+        try:
+            global status
+        
+            c = input()
+        
+            if(c == "p"):
+                status= "preheat"
+            elif(c == "c"):
+                status= "charge"
+            elif(c == "1"):
+                status= "first crack"
+            elif(c == "2"):
+                status= "second crack"
+            elif(c == "l"):
+                status= "light"
+            elif(c == "m"):
+                status= "medium"
+            elif(c == "d"):
+                status= "dark"
+            elif(c == "q"):
+                status= "finish"
 
-        o = "#" + status + ";"
-        serial_handler.write(o.encode())
+            o = "#" + status + ";"
+            serial_handler.write(o.encode())
+        except:
+            is_run = False
+            break
 
 def listen_sensor():
     global is_run

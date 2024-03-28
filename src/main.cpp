@@ -4,6 +4,7 @@
 #include "ArduinoJson.h"
 #include "ADS1X15.h"
 #include "Adafruit_SHT31.h"
+#include "memory.h"
 
 #define DEBUG 0
 
@@ -31,7 +32,7 @@
 #define ADS2_CHAN_TGS822  2
 #define ADS2_CHAN_TGS2620 3
 
-#define pcSerial Serial2
+#define pcSerial Serial
 
 namespace ROASTING_LEVEL {
     enum {CHARGE, LIGHT, MEDIUM, DARK};
@@ -70,10 +71,15 @@ void loop()
 {
     unsigned long ms = millis();
     adsCallback();
-    unsigned long done_ms = millis();
 
-    pcSerial.print("delay : ");
-    pcSerial.println(done_ms - ms);
+    unsigned long done_ms;
+    
+    do {
+        done_ms = millis();
+    } while((done_ms - ms) < 35);
+
+    // pcSerial.print("delay : ");
+    // pcSerial.println(done_ms - ms);
 }
 
 void init_hardwares()
@@ -90,6 +96,8 @@ void init_hardwares()
     Wire.begin();
 
     pcSerial.begin(115200);
+
+    pcSerial.println("ok");
 }
 
 void init_check_sensors()
@@ -117,8 +125,11 @@ void init_check_sensors()
 
     ads1.setGain(ADS_GAIN);
     ads2.setGain(ADS_GAIN);
-
+    ads1.setDataRate(7);
+    ads2.setDataRate(7);
 }
+
+char buffer[100];
 
 void adsCallback()
 {
@@ -133,8 +144,11 @@ void adsCallback()
     adc_tgs2620 = ads2.readADC(ADS2_CHAN_TGS2620);
 
     // SHT31 sensor readings
-    float t = sht31.readTemperature();
-    float h = sht31.readHumidity();
+    float t = -99;
+    float h = -99;
+    sht31.readBoth(&t, &h);
+    // float t = sht31.readTemperature();
+    // float h = sht31.readHumidity();
 
     if (isnan(t)){t = -99;}
     if (isnan(h)){h = -99;}
@@ -157,6 +171,8 @@ void adsCallback()
     sensor_json["humidity"]    = h;
 
     serializeJson(sensor_json, pcSerial);
+    // memcpy(buffer, &adc_mq135, sizeof(uint16_t));
+    // pcSerial.print(adc_mq135);
     pcSerial.print("\n");
 }
 
